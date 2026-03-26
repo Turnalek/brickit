@@ -1,0 +1,17 @@
+[package]
+name = "init"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+common = { path = "../common", version = "*" }
+libc = { workspace = true }
+nix = { workspace = true, features = ["ioctl", "socket"]}
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"], default-features = false }
+tokio-vsock = { workspace = true }
+
+[[bin]]
+name = "init"
+path = "src/init.rs"

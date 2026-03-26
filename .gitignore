@@ -1,0 +1,13 @@
+.DS_Store
+.vscode
+.claude
+target/
+
+*.sock
+*.key
+*.pivot
+*.secret
+*.configuration
+*.share
+.toolchain
+

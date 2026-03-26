@@ -1,0 +1,9 @@
+[package]
+name = "sender"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+common = { path = "../common", version = "*"}
+sha2 = { workspace = true, default-features = false }
+tokio = { workspace = true, features = ["rt-multi-thread", "net"] }

@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = [
+  "init",
+  "common",
+  "sender",
+]
+exclude = [
+  "enclave",
+]
+default-members = [
+  "init",
+]
+
+[workspace.dependencies]
+libc = "=0.2.174"
+nix = { version = "0.30.1", features = ["ioctl", "socket"]}
+sha2 = { version = "0.10", default-features = false }
+tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread", "net", "io-util"], default-features = false }
+tokio-vsock = { version = "0.7.2" }
+
