@@ -14,7 +14,10 @@ async fn main() {
     stream.connect().await.expect("unable to connect");
 
     let hex_string: String = shasum.iter().map(|b| format!("{:02X}", b)).collect();
-    println!("sending data with sha256sum of  '{hex_string}'",);
+    println!(
+        "sending data with size: {} sha256sum: '{hex_string}'",
+        data.len()
+    );
 
     stream.send(&data).await.expect("failed to send payload");
 
@@ -22,5 +25,8 @@ async fn main() {
     let reply_sha = sha_256(&reply);
 
     let hex_string: String = reply_sha.iter().map(|b| format!("{:02X}", b)).collect();
-    println!("received data with sha256sum of '{hex_string}'");
+    println!(
+        "received data with  size: {} sha256sum of '{hex_string}'",
+        reply.len()
+    );
 }

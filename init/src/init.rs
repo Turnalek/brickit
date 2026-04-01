@@ -1,7 +1,7 @@
 mod nitro;
 mod system;
 
-use common::{io::new_socket, stream};
+use common::{io::new_socket, sha_256, stream};
 
 use nitro::init_platform;
 use stream::Listener;
@@ -92,7 +92,9 @@ async fn main() {
         eprintln!("connection accepted, receiving data");
         let msg = stream.recv().await.expect("error receiving");
 
-        eprintln!("received msg len: {}", msg.len());
+        let shasum = sha_256(&msg);
+        let hex_string: String = shasum.iter().map(|b| format!("{:02X}", b)).collect();
+        eprintln!("received msg len: {} sha256sum: '{hex_string}'", msg.len());
         stream.send(&msg).await.expect("failed to send reply");
     }
 }
