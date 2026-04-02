@@ -1,0 +1,26 @@
+
+FROM stagex/eif_build:0.2.2@sha256:291653f1ca528af48fd05858749c443300f6b24d2ffefa7f5a3a06c27c774566 AS eif_build
+FROM stagex/gen_initramfs:6.8@sha256:f5b9271cca6003e952cbbb9ef041ffa92ba328894f563d1d77942e6b5cdeac1a AS gen_initramfs
+# NB(scm): reverted to the old linux-nitro on the recommendation from Lance:
+#  the latest linux kernel crashes the nitro enclave.
+#FROM stagex/linux-nitro:5.19.6@sha256:e6c8a861f9b18edfad56b1aa130feb822a25987c71e2b2932b020750dd7325bc AS linux-nitro
+FROM stagex/linux-nitro:sx2024.03.0@sha256:073c4603686e3bdc0ed6755fee3203f6f6f1512e0ded09eaea8866b002b04264 AS linux-nitro
+
+FROM ghcr.io/tkhq/base/rust:sha-2f7790d638553221661f477c8c61abef36af00d4@sha256:f35ee463ce91ac8108e5fc2b400a7ca36ff9ecffffd7a8ed02f63a8cdd9344d9 AS build
+ADD . /src/
+
+ENV CARGOFLAGS='--target x86_64-unknown-linux-musl --locked --release'
+ENV CARGO_HOME=/tmp/rust
+ENV RUSTFLAGS='-C target-feature=+crt-static'
+
+FROM build AS build-sender
+WORKDIR /src
+RUN cargo build -p sender ${CARGOFLAGS}
+RUN cp target/x86_64-unknown-linux-musl/release/sender /
+RUN file /sender | grep "static-pie"
+
+# Starting "FROM scratch" is important here given this interacts with the nitro enclave to boot it
+# No shell, no access to "core", just the bare minimum.
+FROM scratch AS package
+COPY --from=build-sender /sender .
+ENTRYPOINT ["/bin/bash"]
