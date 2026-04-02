@@ -10,4 +10,5 @@ target/
 *.configuration
 *.share
 .toolchain
+out/
 
