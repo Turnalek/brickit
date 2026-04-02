@@ -1,15 +1,20 @@
-.PHONY: all build clean run
+.PHONY: clean run send
 
-build:
-	docker build -t brickit .
+out/nitro.tar: Dockerfile init/Cargo.toml init/src/*.rs common/Cargo.toml common/src/*.rs
+	docker build -t brickit -f Dockerfile . --output type=tar,dest=out/nitro.tar
 
-eif:
-	./scripts/dexport.sh brickit
+out/sender.tar: Dockerfile.sender sender/Cargo.toml sender/src/main.rs common/Cargo.toml common/src/*.rs
+	docker build -t sender -f Dockerfile.sender . --output type=tar,dest=out/sender.tar
+
+out/nitro.eif: out/nitro.tar
+	tar -xf out/nitro.tar -C out
+
+out/sender: out/sender.tar
+	tar -xf out/sender.tar -C out
 
 clean:
 	cargo clean
-	cd enclave && cargo clean && cd ..
-	rm -f nitro.eif nitro.pcrs
+	rm -f out/*
 
 run:
 	cargo run --release -- noboot

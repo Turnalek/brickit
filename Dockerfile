@@ -12,12 +12,6 @@ ENV CARGOFLAGS='--target x86_64-unknown-linux-musl --locked --release'
 ENV CARGO_HOME=/tmp/rust
 ENV RUSTFLAGS='-C target-feature=+crt-static'
 
-FROM build AS build-enclave
-WORKDIR /src/enclave
-RUN cargo build ${CARGOFLAGS}
-RUN cp target/x86_64-unknown-linux-musl/release/enclave /
-RUN file /enclave | grep "static-pie"
-
 FROM build AS build-init
 WORKDIR /src
 RUN cargo build ${CARGOFLAGS}
@@ -71,8 +65,5 @@ RUN eif_build \
 # No shell, no access to "core", just the bare minimum.
 FROM scratch AS package
 COPY --from=build-eif /nitro.eif .
-COPY --from=build-eif /nitro.pcrs .
-ENTRYPOINT ["/enclave"]
-ENV EIF_PATH=/nitro.eif
-ENV ENCLAVE_NAME=brickit
-EXPOSE 8080
+# COPY --from=build-eif /nitro.pcrs .
+ENTRYPOINT ["/bin/bash"]

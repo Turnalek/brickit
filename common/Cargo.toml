@@ -9,6 +9,4 @@ publish = false
 libc = { workspace = true }
 nix = { workspace = true, features = ["ioctl", "socket"]}
 sha2 = { workspace = true, default-features = false }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"], default-features = false }
-tokio-vsock = { workspace = true }
 

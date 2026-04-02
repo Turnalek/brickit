@@ -1,10 +1,14 @@
 mod nitro;
 mod system;
 
-use common::{io::new_socket, sha_256, stream};
+use std::os::fd::AsRawFd;
+
+use common::{new_vsock_raw, sha_256};
 
 use nitro::init_platform;
-use stream::Listener;
+use nix::sys::socket::{
+    accept, bind, listen, recv, socket, AddressFamily, Backlog, MsgFlags, SockFlag, SockType,
+};
 use system::{dmesg, freopen, get_local_cid, mount};
 
 // Mount common filesystems with conservative permissions
@@ -62,39 +66,57 @@ pub const VMADDR_FLAG_TO_HOST: u8 = 0x01;
 /// Don't specify any flags for a VSOCK.
 pub const VMADDR_NO_FLAGS: u8 = 0x00;
 
-#[tokio::main]
-async fn main() {
-    let mut args = std::env::args();
-    let mock_mode = args.nth(1).is_some();
-
-    if !mock_mode {
-        boot();
-    } else {
-        eprintln!("skipping boot block in mock run");
-    }
+fn main() {
+    boot();
 
     dmesg("Brickit Booted".to_string());
 
-    let cid = if mock_mode {
-        None
-    } else {
-        Some(get_local_cid().unwrap())
-    };
+    let cid = get_local_cid().expect("unable to get local cid");
     dmesg(format!("CID is {cid:?}"));
 
-    let core_socket = new_socket(cid);
-    let listener = Listener::listen(&core_socket).expect("unable to create listener");
+    let addr = new_vsock_raw(cid, 3, VMADDR_NO_FLAGS);
+    let core_socket = socket(
+        AddressFamily::Vsock,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )
+    .expect("unable to create core socket");
+
+    bind(core_socket.as_raw_fd(), &addr).expect("unable to bind core socket");
+
+    // rust stdlib uses a 128 connection backlog
+    listen(&core_socket, Backlog::new(128).unwrap_or(Backlog::MAXCONN))
+        .expect("unable to listen on core socket");
 
     loop {
         eprintln!("awaiting connection");
-        let mut stream = listener.accept().await.expect("error accepting");
+        let stream_fd = accept(core_socket.as_raw_fd()).expect("unable to accept on core socket");
 
-        eprintln!("connection accepted, receiving data");
-        let msg = stream.recv().await.expect("error receiving");
+        eprintln!("connection accepted, receiving header");
+        let mut buf = [0u8; 8];
+        let bytes = recv(stream_fd, &mut buf, MsgFlags::empty())
+            .expect("unable to receive on socket stream");
+        assert_eq!(8, bytes);
+        let length = u64::from_le_bytes(buf);
+
+        eprintln!(
+            "received header, data length is {length} bytes, receiving data portion in 64kB chunks"
+        );
+        let mut buf = [0u8; 65535];
+        let mut msg = Vec::new();
+
+        while msg.len() < length as usize {
+            let bytes = recv(stream_fd, &mut buf, MsgFlags::empty())
+                .expect("unable to receive data on core stream");
+            if bytes == 0 {
+                break;
+            }
+            msg.extend_from_slice(&buf[0..bytes]);
+        }
 
         let shasum = sha_256(&msg);
         let hex_string: String = shasum.iter().map(|b| format!("{:02X}", b)).collect();
         eprintln!("received msg len: {} sha256sum: '{hex_string}'", msg.len());
-        stream.send(&msg).await.expect("failed to send reply");
     }
 }

@@ -199,12 +199,8 @@ impl std::fmt::Display for SocketAddress {
 }
 
 /// Create new socket address in mock or normal mode
-pub fn new_socket(cid: Option<u32>) -> SocketAddress {
-    if let Some(cid) = cid {
-        SocketAddress::new_vsock(cid, 3, VMADDR_NO_FLAGS)
-    } else {
-        SocketAddress::new_unix("/tmp/brickit.sock")
-    }
+pub fn new_socket(cid: u32, flags: u8) -> SocketAddress {
+    SocketAddress::new_vsock(cid, 3, flags)
 }
 
 /// Extract svm_flags field value from existing VSOCK.

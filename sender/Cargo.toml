@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 common = { path = "../common", version = "*"}
+nix = { workspace = true, features = ["socket"]}
 sha2 = { workspace = true, default-features = false }
-tokio = { workspace = true, features = ["rt-multi-thread", "net"] }

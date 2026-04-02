@@ -9,8 +9,6 @@ publish = false
 common = { path = "../common", version = "*" }
 libc = { workspace = true }
 nix = { workspace = true, features = ["ioctl", "socket"]}
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"], default-features = false }
-tokio-vsock = { workspace = true }
 
 [[bin]]
 name = "init"
