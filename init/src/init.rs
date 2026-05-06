@@ -66,6 +66,8 @@ pub const VMADDR_FLAG_TO_HOST: u8 = 0x01;
 /// Don't specify any flags for a VSOCK.
 pub const VMADDR_NO_FLAGS: u8 = 0x00;
 
+const PORT: u32 = 9001;
+
 fn main() {
     boot();
 
@@ -74,7 +76,7 @@ fn main() {
     let cid = get_local_cid().expect("unable to get local cid");
     dmesg(format!("CID is {cid:?}"));
 
-    let addr = new_vsock_raw(cid, 3, VMADDR_NO_FLAGS);
+    let addr = new_vsock_raw(cid, PORT, VMADDR_NO_FLAGS);
     let core_socket = socket(
         AddressFamily::Vsock,
         SockType::Stream,
@@ -92,31 +94,39 @@ fn main() {
     loop {
         eprintln!("awaiting connection");
         let stream_fd = accept(core_socket.as_raw_fd()).expect("unable to accept on core socket");
+        eprintln!("connection accepted");
 
-        eprintln!("connection accepted, receiving header");
-        let mut buf = [0u8; 8];
-        let bytes = recv(stream_fd, &mut buf, MsgFlags::empty())
-            .expect("unable to receive on socket stream");
-        assert_eq!(8, bytes);
-        let length = u64::from_le_bytes(buf);
-
-        eprintln!(
-            "received header, data length is {length} bytes, receiving data portion in 64kB chunks"
-        );
-        let mut buf = [0u8; 65535];
-        let mut msg = Vec::new();
-
-        while msg.len() < length as usize {
+        'msg: loop {
+            eprintln!("receiving header");
+            let mut buf = [0u8; 8];
             let bytes = recv(stream_fd, &mut buf, MsgFlags::empty())
-                .expect("unable to receive data on core stream");
+                .expect("unable to receive on socket stream");
+            println!("received {bytes}");
             if bytes == 0 {
                 break;
             }
-            msg.extend_from_slice(&buf[0..bytes]);
-        }
 
-        let shasum = sha_256(&msg);
-        let hex_string: String = shasum.iter().map(|b| format!("{:02X}", b)).collect();
-        eprintln!("received msg len: {} sha256sum: '{hex_string}'", msg.len());
+            assert_eq!(buf.len(), bytes);
+            let length = u64::from_le_bytes(buf);
+
+            eprintln!(
+                "received header, data length is {length} bytes, receiving data portion in 64kB chunks"
+            );
+            let mut buf = [0u8; 65535];
+            let mut msg = Vec::new();
+
+            while msg.len() < length as usize {
+                let bytes = recv(stream_fd, &mut buf[..length as usize], MsgFlags::empty())
+                    .expect("unable to receive data on core stream");
+                if bytes == 0 {
+                    break 'msg;
+                }
+                msg.extend_from_slice(&buf[0..bytes]);
+            }
+
+            let shasum = sha_256(&msg);
+            let hex_string: String = shasum.iter().map(|b| format!("{:02X}", b)).collect();
+            eprintln!("received msg len: {} sha256sum: '{hex_string}'", msg.len());
+        }
     }
 }
