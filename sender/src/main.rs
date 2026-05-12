@@ -1,12 +1,33 @@
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 
-use common::{VMADDR_NO_FLAGS, new_vsock_raw, sha_256};
-use nix::sys::socket::{AddressFamily, MsgFlags, SockFlag, SockType, connect, send, socket};
+use common::{
+    VMADDR_NO_FLAGS, copy_bidirectional, create_core_socket, create_raw_socket, new_vsock_raw,
+    sha_256,
+};
+use nix::sys::socket::{
+    AddressFamily, MsgFlags, SockFlag, SockType, SockaddrLike, connect, send, socket,
+};
 
 const PORT: u32 = 9001;
 const CID: u32 = 1;
 
+pub fn host_egress(addr: &dyn SockaddrLike) {
+    let proxy_fd = create_core_socket().expect("unable to create vsock");
+    connect(proxy_fd.as_raw_fd(), addr).expect("unable to connect to vsock");
+
+    let sock_fd = create_raw_socket("host_egress").expect("unable to create raw socket");
+
+    println!("host egress running");
+    copy_bidirectional(sock_fd.as_fd(), proxy_fd.as_fd(), false);
+}
+
 fn main() {
+    let addr = new_vsock_raw(CID, PORT, VMADDR_NO_FLAGS);
+    host_egress(&addr);
+}
+
+#[allow(unused)]
+fn send_file() {
     let file_path = std::env::args()
         .nth(1)
         .expect("payload file required as first argument");
@@ -33,6 +54,7 @@ fn main() {
     }
 }
 
+#[allow(unused)]
 fn send_msg(core_socket: i32, data: &[u8], hex_string: &str) {
     println!(
         "sending data with size: {} sha256sum: '{hex_string}'",

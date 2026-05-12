@@ -1,14 +1,15 @@
 mod nitro;
 mod system;
 
-use std::os::fd::AsRawFd;
+use std::{
+    os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
+    process::{Child, Command},
+};
 
-use common::{new_vsock_raw, sha_256};
+use common::{copy_bidirectional, create_core_socket, create_raw_socket, new_vsock_raw};
 
 use nitro::init_platform;
-use nix::sys::socket::{
-    accept, bind, listen, recv, socket, AddressFamily, Backlog, MsgFlags, SockFlag, SockType,
-};
+use nix::sys::socket::{accept, bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType};
 use system::{dmesg, freopen, get_local_cid, mount};
 
 // Mount common filesystems with conservative permissions
@@ -67,66 +68,69 @@ pub const VMADDR_FLAG_TO_HOST: u8 = 0x01;
 pub const VMADDR_NO_FLAGS: u8 = 0x00;
 
 const PORT: u32 = 9001;
+const IP_PATH: &str = "/usr/sbin/ip";
 
 fn main() {
     boot();
 
     dmesg("Brickit Booted".to_string());
 
+    run_ip("tuntap add enclave_egress mode tun", "tuntap add failed");
+    run_ip("link set enclave_egress up", "unable to bring up interface");
+    run_ip("route add default dev enclave_egress", "unable to route");
+
+    let ip_link = run_cmd(IP_PATH, "link show")
+        .expect("unable to run ip command")
+        .wait_with_output()
+        .expect("ip program failed to finish");
+    eprintln!(
+        "{}",
+        std::str::from_utf8(&ip_link.stdout).expect("invalid utf-8")
+    );
+
     let cid = get_local_cid().expect("unable to get local cid");
     dmesg(format!("CID is {cid:?}"));
 
     let addr = new_vsock_raw(cid, PORT, VMADDR_NO_FLAGS);
-    let core_socket = socket(
-        AddressFamily::Vsock,
-        SockType::Stream,
-        SockFlag::empty(),
-        None,
-    )
-    .expect("unable to create core socket");
+    let core_socket = create_core_socket().expect("unable to create core socket");
 
     bind(core_socket.as_raw_fd(), &addr).expect("unable to bind core socket");
 
     // rust stdlib uses a 128 connection backlog
-    listen(&core_socket, Backlog::new(128).unwrap_or(Backlog::MAXCONN))
-        .expect("unable to listen on core socket");
+    listen(
+        &core_socket,
+        Backlog::new(1).expect("unable to set backlog"),
+    )
+    .expect("unable to listen on core socket");
 
     loop {
-        eprintln!("awaiting connection");
+        println!("awaiting connection");
         let stream_fd = accept(core_socket.as_raw_fd()).expect("unable to accept on core socket");
-        eprintln!("connection accepted");
+        let stream = unsafe { OwnedFd::from_raw_fd(stream_fd) };
 
-        'msg: loop {
-            eprintln!("receiving header");
-            let mut buf = [0u8; 8];
-            let bytes = recv(stream_fd, &mut buf, MsgFlags::empty())
-                .expect("unable to receive on socket stream");
-            println!("received {bytes}");
-            if bytes == 0 {
-                break;
-            }
+        println!("connection accepted, creating raw socket");
 
-            assert_eq!(buf.len(), bytes);
-            let length = u64::from_le_bytes(buf);
+        let sock_fd = create_raw_socket("enclave_egress").expect("unable to create raw socket");
 
-            eprintln!(
-                "received header, data length is {length} bytes, receiving data portion in 64kB chunks"
-            );
-            let mut buf = [0u8; 65535];
-            let mut msg = Vec::new();
-
-            while msg.len() < length as usize {
-                let bytes = recv(stream_fd, &mut buf[..length as usize], MsgFlags::empty())
-                    .expect("unable to receive data on core stream");
-                if bytes == 0 {
-                    break 'msg;
-                }
-                msg.extend_from_slice(&buf[0..bytes]);
-            }
-
-            let shasum = sha_256(&msg);
-            let hex_string: String = shasum.iter().map(|b| format!("{:02X}", b)).collect();
-            eprintln!("received msg len: {} sha256sum: '{hex_string}'", msg.len());
-        }
+        println!("enclave egress running");
+        copy_bidirectional(sock_fd.as_fd(), stream.as_fd(), false);
     }
+}
+
+fn run_ip(args: &str, fail_str: &str) {
+    let ip_exit = run_cmd(IP_PATH, args)
+        .expect("unable to run ip command")
+        .wait()
+        .expect("ip program failed to finish");
+    assert!(ip_exit.success(), "{}", fail_str);
+}
+
+fn run_cmd(cmd_path: &str, args: &str) -> std::io::Result<Child> {
+    // ip is dynlinked so we need to execute it with the right loader
+    // TODO: figure out why the kernel doesn't look at /lib/ld-musl-x86 itself since it matches that in .interop of ip
+    Command::new("/lib/ld-musl-x86")
+        .env_clear()
+        .arg(cmd_path)
+        .args(args.split(" "))
+        .spawn()
 }

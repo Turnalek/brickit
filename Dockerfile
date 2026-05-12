@@ -1,5 +1,7 @@
 FROM stagex/eif_build:0.2.2@sha256:291653f1ca528af48fd05858749c443300f6b24d2ffefa7f5a3a06c27c774566 AS eif_build
 FROM stagex/gen_initramfs:6.8@sha256:f5b9271cca6003e952cbbb9ef041ffa92ba328894f563d1d77942e6b5cdeac1a AS gen_initramfs
+FROM stagex/iproute2:sx2024.11.0@sha256:65da03aa94d17dd6310b022f426a6cc8b3c55bb267e4bac1697bc57d6c850570 AS iproute2
+FROM stagex/musl:sx2024.11.0@sha256:d7f6c365f5724c65cadb2b96d9f594e46132ceb366174c89dbf7554897f2bc53 AS musl
 # NB(scm): reverted to the old linux-nitro on the recommendation from Lance:
 #  the latest linux kernel crashes the nitro enclave.
 #FROM stagex/linux-nitro:5.19.6@sha256:e6c8a861f9b18edfad56b1aa130feb822a25987c71e2b2932b020750dd7325bc AS linux-nitro
@@ -24,9 +26,11 @@ COPY --from=eif_build . /
 COPY --from=gen_initramfs . /
 COPY --from=build-init /init .
 COPY --from=linux-nitro /nsm.ko .
+COPY --from=iproute2 . /
+COPY --from=musl . /
 COPY <<-EOF initramfs.list
-	file /init     init    0755 0 0
-	file /nsm.ko   nsm.ko  0755 0 0
+	file /init     init    0700 0 0
+	file /nsm.ko   nsm.ko  0600 0 0
 	dir  /run              0755 0 0
 	dir  /tmp              0755 0 0
 	dir  /etc              0755 0 0
@@ -35,11 +39,17 @@ COPY <<-EOF initramfs.list
 	dir  /proc             0755 0 0
 	dir  /sys              0755 0 0
 	dir  /usr              0755 0 0
+	dir  /lib              0755 0 0
 	dir  /usr/bin          0755 0 0
 	dir  /usr/sbin         0755 0 0
+	dir  /usr/lib          0755 0 0
 	dir  /dev              0755 0 0
 	dir  /dev/shm          0755 0 0
 	dir  /dev/pts          0755 0 0
+	file /usr/sbin/ip     /usr/sbin/ip    0700 0 0
+	file /usr/bin/ldd     /usr/bin/ldd    0700 0 0
+	file /lib/ld-musl-x86     /usr/lib/ld-musl-x86_64.so.1      0700 0 0
+	file /usr/lib/libc.musl-x86_64.so.1 /usr/lib/libc.musl-x86_64.so.1    0644 0 0
 	nod  /dev/console      0600 0 0 c 5 1
 EOF
 ENV CPIO_TIMESTAMP=1

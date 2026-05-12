@@ -1,9 +1,34 @@
-use nix::sys::socket::{AddressFamily, SockaddrLike, VsockAddr};
+use std::{
+    ffi::CString,
+    os::fd::{BorrowedFd, FromRawFd, OwnedFd},
+};
+
+use libc::{ifreq, open, IFF_NO_PI, IFF_TUN, O_RDWR};
+use nix::{
+    sys::socket::{socket, AddressFamily, SockFlag, SockType, SockaddrLike, VsockAddr},
+    unistd::{read, write},
+    NixPath,
+};
 
 /// VSOCK flag for talking to host if we deploy multiple enclave "horizontally" on the same VM.
 pub const VMADDR_FLAG_TO_HOST: u8 = 0x01;
 /// Don't specify any flags for a VSOCK.
 pub const VMADDR_NO_FLAGS: u8 = 0x00;
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum TrafficDirection {
+    RawToVsock(bool),
+    VsockToRaw(bool),
+}
+
+impl TrafficDirection {
+    pub fn debug(&self) -> bool {
+        match self {
+            Self::RawToVsock(debug) => *debug,
+            Self::VsockToRaw(debug) => *debug,
+        }
+    }
+}
 
 #[repr(C)]
 struct SockAddrVm {
@@ -49,4 +74,81 @@ pub fn sha_256(buf: &[u8]) -> [u8; 32] {
     let mut hasher = sha2::Sha256::new();
     hasher.update(buf);
     hasher.finalize().into()
+}
+
+pub fn create_core_socket() -> Result<OwnedFd, nix::Error> {
+    socket(
+        AddressFamily::Vsock,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )
+}
+
+pub fn create_raw_socket(if_name: &str) -> Result<OwnedFd, nix::Error> {
+    let if_name = CString::new(if_name).unwrap();
+    let name_ptr = if_name.as_ptr();
+    let name_len = if_name.len().min(nix::libc::IFNAMSIZ - 1);
+    let mut ifr = ifreq {
+        ifr_name: [0; nix::libc::IFNAMSIZ],
+        ifr_ifru: unsafe { std::mem::zeroed() },
+    };
+
+    let tun_dev = CString::new("/dev/net/tun").unwrap();
+
+    unsafe {
+        let fd = open(tun_dev.as_ptr(), O_RDWR);
+        if fd < 0 {
+            panic!("unable to open /dev/net/tun");
+        }
+        std::ptr::copy_nonoverlapping(name_ptr, ifr.ifr_name.as_mut_ptr(), name_len);
+        ifr.ifr_ifru.ifru_flags = IFF_TUN as i16 | IFF_NO_PI as i16;
+
+        // Set flags to IFF_TUN
+        // Using libc directly for the ioctl is common when nix lacks the specific macro:
+        let ret = nix::libc::ioctl(fd, 0x400454ca, &ifr as *const ifreq);
+        if ret < 0 {
+            panic!("unable to ioctl tun");
+        }
+
+        Ok(OwnedFd::from_raw_fd(fd))
+    }
+}
+
+// copies traffic in both directions between two sockets using threads
+pub fn copy_bidirectional<'fd>(fd1: BorrowedFd<'fd>, fd2: BorrowedFd<'fd>, debug: bool) {
+    std::thread::scope(|s| {
+        let sfd = fd1.clone();
+        let tfd = fd2.clone();
+        s.spawn(move || {
+            pipe_all(sfd, tfd, TrafficDirection::RawToVsock(debug))
+                .expect("error piping from raw to vsock");
+        });
+
+        let sfd = fd1.clone();
+        let tfd = fd2.clone();
+        s.spawn(move || {
+            pipe_all(tfd, sfd, TrafficDirection::VsockToRaw(debug))
+                .expect("error piping from vsock to raw");
+        });
+    });
+}
+
+// sends all traffic from fd_from to fd_to
+fn pipe_all(
+    fd_from: BorrowedFd,
+    fd_to: BorrowedFd,
+    direction: TrafficDirection,
+) -> Result<(), nix::Error> {
+    let mut buf = [0u8; 65535];
+    loop {
+        let received = read(fd_from, &mut buf)?;
+
+        if direction.debug() {
+            eprint!(".");
+            // debug_data(&buf[..received], &direction);
+        }
+
+        write(fd_to, &buf[..received])?;
+    }
 }
