@@ -6,10 +6,12 @@ use std::{
     process::{Child, Command},
 };
 
-use common::{copy_bidirectional, create_core_socket, create_raw_socket, new_vsock_raw};
+use common::{
+    copy_bidirectional, create_core_socket, create_raw_socket, new_vsock_raw, print_counters,
+};
 
 use nitro::init_platform;
-use nix::sys::socket::{accept, bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType};
+use nix::sys::socket::{accept, bind, listen, Backlog};
 use system::{dmesg, freopen, get_local_cid, mount};
 
 // Mount common filesystems with conservative permissions
@@ -76,10 +78,12 @@ fn main() {
     dmesg("Brickit Booted".to_string());
 
     run_ip("tuntap add enclave_egress mode tun", "tuntap add failed");
-    run_ip("link set enclave_egress up", "unable to bring up interface");
+    run_ip("link set lo up", "unable to bring up lo");
+    run_ip("address add 10.0.0.1/32 dev lo", "ip assign to lo failed");
+    run_ip("link set enclave_egress up", "unable to bring up egress");
     run_ip("route add default dev enclave_egress", "unable to route");
 
-    let ip_link = run_cmd(IP_PATH, "link show")
+    let ip_link = run_cmd(IP_PATH, "a show dev lo")
         .expect("unable to run ip command")
         .wait_with_output()
         .expect("ip program failed to finish");
@@ -103,17 +107,42 @@ fn main() {
     )
     .expect("unable to listen on core socket");
 
-    loop {
-        println!("awaiting connection");
-        let stream_fd = accept(core_socket.as_raw_fd()).expect("unable to accept on core socket");
-        let stream = unsafe { OwnedFd::from_raw_fd(stream_fd) };
+    println!("awaiting initial vsock connection");
+    let stream_fd = accept(core_socket.as_raw_fd()).expect("unable to accept on core socket");
+    let stream = unsafe { OwnedFd::from_raw_fd(stream_fd) };
+    let sock_fd = create_raw_socket("enclave_egress").expect("unable to create raw socket");
 
-        println!("connection accepted, creating raw socket");
-
-        let sock_fd = create_raw_socket("enclave_egress").expect("unable to create raw socket");
-
+    let _egress_worker = std::thread::spawn(move || {
         println!("enclave egress running");
         copy_bidirectional(sock_fd.as_fd(), stream.as_fd(), false);
+    });
+
+    println!("waiting 1s before info...");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let ip_link = run_cmd(IP_PATH, "a show dev enclave_egress")
+        .expect("unable to run ip command")
+        .wait_with_output()
+        .expect("ip program failed to finish");
+    eprintln!(
+        "{}",
+        std::str::from_utf8(&ip_link.stdout).expect("invalid utf-8")
+    );
+
+    // print_counters();
+    loop {
+        println!("waiting 1s before ping...");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        let ping = run_cmd("/usr/bin/ping", "-4 -A 109.123.250.238")
+            // let ping = run_static("/downer.x86_64", "")
+            .expect("unable to run ping")
+            .wait_with_output()
+            .expect("unable to collect ping output");
+        println!(
+            "{}",
+            std::str::from_utf8(&ping.stdout).expect("invalid utf-8")
+        );
     }
 }
 
@@ -123,6 +152,13 @@ fn run_ip(args: &str, fail_str: &str) {
         .wait()
         .expect("ip program failed to finish");
     assert!(ip_exit.success(), "{}", fail_str);
+}
+
+fn run_static(cmd_path: &str, args: &str) -> std::io::Result<Child> {
+    Command::new(cmd_path)
+        .env_clear()
+        .args(args.split(" "))
+        .spawn()
 }
 
 fn run_cmd(cmd_path: &str, args: &str) -> std::io::Result<Child> {

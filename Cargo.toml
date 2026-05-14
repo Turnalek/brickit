@@ -4,6 +4,7 @@ members = [
   "init",
   "common",
   "sender",
+  "downer",
 ]
 default-members = [
   "init",
@@ -13,4 +14,5 @@ default-members = [
 libc = "=0.2.174"
 nix = { version = "0.30.1", features = ["ioctl", "socket"]}
 sha2 = { version = "0.10", default-features = false }
+reqwest = { version = "0.13.3", default-features = false }
 

@@ -1,6 +1,11 @@
 use std::{
     ffi::CString,
     os::fd::{BorrowedFd, FromRawFd, OwnedFd},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock,
+    },
+    time::{Duration, SystemTime},
 };
 
 use libc::{ifreq, open, IFF_NO_PI, IFF_TUN, O_RDWR};
@@ -16,7 +21,7 @@ pub const VMADDR_FLAG_TO_HOST: u8 = 0x01;
 pub const VMADDR_NO_FLAGS: u8 = 0x00;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-enum TrafficDirection {
+pub enum TrafficDirection {
     RawToVsock(bool),
     VsockToRaw(bool),
 }
@@ -140,15 +145,173 @@ fn pipe_all(
     fd_to: BorrowedFd,
     direction: TrafficDirection,
 ) -> Result<(), nix::Error> {
-    let mut buf = [0u8; 65535];
-    loop {
-        let received = read(fd_from, &mut buf)?;
+    // NOTE: qemu has the same bug as aws nitro
+    let mut buf = [0u8; 1500];
+    let debug = direction.debug();
 
-        if direction.debug() {
-            eprint!(".");
-            // debug_data(&buf[..received], &direction);
+    loop {
+        let start = SystemTime::now();
+        let received = read(fd_from, &mut buf)?;
+        get_counters().read_add(
+            SystemTime::now()
+                .duration_since(start)
+                .map_err(|_| nix::Error::UnknownErrno)?,
+            &direction,
+        );
+
+        if debug {
+            eprintln!("received {received} @ {direction:?}");
         }
 
-        write(fd_to, &buf[..received])?;
+        let mut sent = 0;
+        while sent < received {
+            let start = SystemTime::now();
+            sent += write(fd_to, &buf[sent..received])?;
+            get_counters().write_add(
+                SystemTime::now()
+                    .duration_since(start)
+                    .map_err(|_| nix::Error::UnknownErrno)?,
+                &direction,
+            );
+
+            if debug {
+                eprintln!("sent {sent} @ {direction:?}");
+            }
+        }
     }
+}
+
+// copies traffic in both directions between two sockets using threads
+pub fn copy_bidirectional_raw(fd1: i32, fd2: i32, debug: bool) {
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            pipe_all_raw(fd1, fd2, TrafficDirection::RawToVsock(debug))
+                .expect("error piping from raw to vsock");
+        });
+
+        s.spawn(move || {
+            pipe_all_raw(fd2, fd1, TrafficDirection::VsockToRaw(debug))
+                .expect("error piping from vsock to raw");
+        });
+    });
+}
+
+// sends all traffic from fd_from to fd_to
+fn pipe_all_raw(fd_from: i32, fd_to: i32, direction: TrafficDirection) -> Result<(), nix::Error> {
+    // NOTE: qemu has the same bug as aws nitro
+    let mut buf = [0u8; 32000];
+    let debug = direction.debug();
+
+    loop {
+        let start = SystemTime::now();
+        let received = unsafe {
+            libc::read(
+                fd_from,
+                (&mut buf).as_mut_ptr().cast(),
+                buf.len() as libc::size_t,
+            ) as usize
+        };
+
+        get_counters().read_add(
+            SystemTime::now()
+                .duration_since(start)
+                .map_err(|_| nix::Error::UnknownErrno)?,
+            &direction,
+        );
+
+        if debug {
+            eprintln!("received {received} @ {direction:?}");
+        }
+
+        let mut sent = 0;
+        while sent < received {
+            let start = SystemTime::now();
+            sent += unsafe {
+                libc::write(
+                    fd_to,
+                    (&buf[sent..received]).as_ptr().cast(),
+                    received - sent,
+                ) as usize
+            };
+            get_counters().write_add(
+                SystemTime::now()
+                    .duration_since(start)
+                    .map_err(|_| nix::Error::UnknownErrno)?,
+                &direction,
+            );
+
+            if debug {
+                eprintln!("sent {sent} @ {direction:?}");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct TrafficCounters {
+    reads: AtomicU64,
+    writes: AtomicU64,
+    vsock_to_raw_read: AtomicU64,
+    vsock_to_raw_write: AtomicU64,
+    raw_to_vsock_read: AtomicU64,
+    raw_to_vsock_write: AtomicU64,
+}
+
+impl TrafficCounters {
+    pub fn read_add(&self, value: Duration, direction: &TrafficDirection) -> u64 {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        match direction {
+            TrafficDirection::RawToVsock(_) => self
+                .raw_to_vsock_read
+                .fetch_add(value.as_micros() as u64, Ordering::SeqCst),
+
+            TrafficDirection::VsockToRaw(_) => self
+                .vsock_to_raw_read
+                .fetch_add(value.as_micros() as u64, Ordering::SeqCst),
+        }
+    }
+
+    pub fn write_add(&self, value: Duration, direction: &TrafficDirection) -> u64 {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        match direction {
+            TrafficDirection::RawToVsock(_) => self
+                .raw_to_vsock_write
+                .fetch_add(value.as_micros() as u64, Ordering::SeqCst),
+
+            TrafficDirection::VsockToRaw(_) => self
+                .vsock_to_raw_write
+                .fetch_add(value.as_micros() as u64, Ordering::SeqCst),
+        }
+    }
+
+    pub fn print(&self) {
+        let reads = self.reads.load(Ordering::Relaxed) as f64;
+        let writes = self.writes.load(Ordering::Relaxed) as f64;
+
+        let vsock_to_raw_read = self.vsock_to_raw_read.load(Ordering::Relaxed) as f64;
+        let vsock_to_raw_write = self.vsock_to_raw_write.load(Ordering::Relaxed) as f64;
+        let raw_to_vsock_read = self.raw_to_vsock_read.load(Ordering::Relaxed) as f64;
+        let raw_to_vsock_write = self.raw_to_vsock_write.load(Ordering::Relaxed) as f64;
+
+        eprintln!("========COUNTERS========\nreads: {}\nvsock_to_raw_read: {}\nraw_to_vsock_read: {}\nwrites: {}\nvsock_to_raw_writes: {}\nraw_to_vsock_writes: {}\n========================",
+            reads,
+            vsock_to_raw_read / reads,
+            raw_to_vsock_read / reads,
+            writes,
+            vsock_to_raw_write / writes,
+            raw_to_vsock_write / writes);
+    }
+}
+
+static COUNTERS: OnceLock<TrafficCounters> = OnceLock::new();
+
+fn get_counters() -> &'static TrafficCounters {
+    COUNTERS.get_or_init(|| TrafficCounters::default())
+}
+
+pub fn print_counters() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_secs(5));
+        get_counters().print();
+    });
 }

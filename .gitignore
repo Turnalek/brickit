@@ -11,4 +11,4 @@ target/
 *.share
 .toolchain
 out/
-
+downer.x86_64

@@ -1,6 +1,8 @@
 FROM stagex/eif_build:0.2.2@sha256:291653f1ca528af48fd05858749c443300f6b24d2ffefa7f5a3a06c27c774566 AS eif_build
 FROM stagex/gen_initramfs:6.8@sha256:f5b9271cca6003e952cbbb9ef041ffa92ba328894f563d1d77942e6b5cdeac1a AS gen_initramfs
 FROM stagex/iproute2:sx2024.11.0@sha256:65da03aa94d17dd6310b022f426a6cc8b3c55bb267e4bac1697bc57d6c850570 AS iproute2
+FROM stagex/libcap:sx2024.11.0@sha256:7fbaa6bae0f944a3916eccfb978ff758ed2bad56ef3b4a86d39454f3587b38d2 AS libcap
+FROM stagex/iputils:sx2024.11.0@sha256:979fdeb70e03c7305aff526f16b6f9f0e503862337ae61f576e17b3d48aad8f6 AS iputils
 FROM stagex/musl:sx2024.11.0@sha256:d7f6c365f5724c65cadb2b96d9f594e46132ceb366174c89dbf7554897f2bc53 AS musl
 # NB(scm): reverted to the old linux-nitro on the recommendation from Lance:
 #  the latest linux kernel crashes the nitro enclave.
@@ -27,7 +29,11 @@ COPY --from=gen_initramfs . /
 COPY --from=build-init /init .
 COPY --from=linux-nitro /nsm.ko .
 COPY --from=iproute2 . /
+COPY --from=libcap . /
+COPY --from=iputils . /
 COPY --from=musl . /
+COPY hosts.file /hosts.file
+COPY downer.x86_64 /downer.x86_64
 COPY <<-EOF initramfs.list
 	file /init     init    0700 0 0
 	file /nsm.ko   nsm.ko  0600 0 0
@@ -46,10 +52,15 @@ COPY <<-EOF initramfs.list
 	dir  /dev              0755 0 0
 	dir  /dev/shm          0755 0 0
 	dir  /dev/pts          0755 0 0
-	file /usr/sbin/ip     /usr/sbin/ip    0700 0 0
-	file /usr/bin/ldd     /usr/bin/ldd    0700 0 0
-	file /lib/ld-musl-x86     /usr/lib/ld-musl-x86_64.so.1      0700 0 0
+	file /usr/sbin/ip      /usr/sbin/ip     0700 0 0
+	file /usr/bin/ldd      /usr/bin/ldd     0700 0 0
+	file /usr/lib/libcap.so.2    /usr/lib/libcap.so.2    0644 0 0
+  file /usr/lib/libcap.so.2.70 /usr/lib/libcap.so.2.70 0644 0 0
+	file /usr/bin/ping     /usr/bin/ping    0700 0 0
+	file /lib/ld-musl-x86  /usr/lib/ld-musl-x86_64.so.1                   0700 0 0
 	file /usr/lib/libc.musl-x86_64.so.1 /usr/lib/libc.musl-x86_64.so.1    0644 0 0
+	file /downer.x86_64    /downer.x86_64   0700 0 0
+	file /hosts.file       /etc/hosts       0644 0 0
 	nod  /dev/console      0600 0 0 c 5 1
 EOF
 ENV CPIO_TIMESTAMP=1

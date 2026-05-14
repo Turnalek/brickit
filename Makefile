@@ -1,4 +1,4 @@
-.PHONY: clean run send vhost kill qemu
+.PHONY: clean run send vhost kill qemu downer
 
 vhost:
 	RUST_LOG=debug vhost-device-vsock --vm guest-cid=4,forward-cid=1,forward-listen=9001,socket=/tmp/vhost4.socket
@@ -24,10 +24,14 @@ out/sender: out/sender.tar
 
 clean:
 	cargo clean
-	rm -f out/*
+	rm -f out/* downer.x86_64
 
 run:
 	cargo run --release -- noboot
 
 send:
-	cargo run -p sender -- README.md
+	cargo run --release -p sender
+
+downer:
+	cargo build --release --target x86_64-unknown-linux-musl -p downer
+	cp target/x86_64-unknown-linux-musl/release/downer downer.x86_64
