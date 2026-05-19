@@ -2,7 +2,7 @@ mod nitro;
 mod system;
 
 use std::{
-    os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     process::{Child, Command},
 };
 
@@ -111,7 +111,7 @@ fn main() {
         let stream = unsafe { OwnedFd::from_raw_fd(stream_fd) };
         let sock_fd = create_raw_socket("enclave_egress").expect("unable to create raw socket");
         println!("enclave egress running");
-        copy_bidirectional(sock_fd.as_fd(), stream.as_fd(), false);
+        copy_bidirectional(sock_fd, stream);
     });
 
     println!("waiting 1s before info...");
