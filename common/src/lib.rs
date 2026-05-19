@@ -209,7 +209,6 @@ fn next_frame(buf: &[u8]) -> Option<usize> {
 fn pipe_frames(fd_from: BorrowedFd, fd_to: BorrowedFd) -> Result<(), nix::Error> {
     // NOTE: qemu has the same bug as aws nitro
     let mut buf = [0u8; 32000];
-    let mut tmp = [0u8; 32000];
     let mut frame_size;
     let mut received = 0;
 
@@ -236,8 +235,7 @@ fn pipe_frames(fd_from: BorrowedFd, fd_to: BorrowedFd) -> Result<(), nix::Error>
                 let tail_size = received - sent;
                 // copy tail to start so we can continue on reads
                 if sent < received {
-                    tmp[..tail_size].copy_from_slice(&buf[sent..received]);
-                    buf[..tail_size].copy_from_slice(&tmp[..tail_size]);
+                    buf.rotate_left(sent);
                 }
                 received = tail_size;
                 break;
