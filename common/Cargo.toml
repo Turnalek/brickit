@@ -8,5 +8,6 @@ publish = false
 [dependencies]
 libc = { workspace = true }
 nix = { workspace = true, features = ["ioctl", "socket"]}
-sha2 = { workspace = true, default-features = false }
+sha2 = { workspace = true }
+etherparse = { workspace = true }
 

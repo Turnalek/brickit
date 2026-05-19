@@ -3,6 +3,9 @@
 
 set -e
 
+# AMAZON BITS
+sudo modprobe br_netfilter
+
 # create egress from host tun interface
 sudo ip tuntap add host_egress mode tun
 
@@ -13,7 +16,7 @@ sudo ip address add 10.0.0.2/28 dev host_egress
 sudo ip link set host_egress up
 
 # ensure forwarding is going to go through
-# echo 1 > /proc/sys/net/ipv4/ip_forward # should be set already
+echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward > /dev/null
 sudo iptables -P FORWARD ACCEPT
 
 # masquerade nat for egress
@@ -26,3 +29,5 @@ ip a show dev host_egress
 #
 # sudo tcpdump -i host_egress -vv -n host 109.123.250.238
 # 
+
+# possibly disable STP on the host

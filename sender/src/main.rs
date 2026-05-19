@@ -17,12 +17,18 @@ pub fn host_egress(addr: &dyn SockaddrLike) {
 
     let sock_fd = create_raw_socket("host_egress").expect("unable to create raw socket");
 
-    println!("host egress running");
-    copy_bidirectional(sock_fd.as_fd(), proxy_fd.as_fd(), false);
+    let debug = false;
+    println!("host egress running: {debug}");
+    copy_bidirectional(sock_fd.as_fd(), proxy_fd.as_fd(), debug);
 }
 
 fn main() {
-    let addr = new_vsock_raw(CID, PORT, VMADDR_NO_FLAGS);
+    let cid: u32 = std::env::args()
+        .nth(1)
+        .unwrap_or("1".to_owned())
+        .parse()
+        .expect("unable to parse cid arg");
+    let addr = new_vsock_raw(cid, PORT, VMADDR_NO_FLAGS);
 
     print_counters();
     host_egress(&addr);

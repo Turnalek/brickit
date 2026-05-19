@@ -6,9 +6,7 @@ use std::{
     process::{Child, Command},
 };
 
-use common::{
-    copy_bidirectional, create_core_socket, create_raw_socket, new_vsock_raw, print_counters,
-};
+use common::{copy_bidirectional, create_core_socket, create_raw_socket, new_vsock_raw};
 
 use nitro::init_platform;
 use nix::sys::socket::{accept, bind, listen, Backlog};
@@ -107,12 +105,11 @@ fn main() {
     )
     .expect("unable to listen on core socket");
 
-    println!("awaiting initial vsock connection");
-    let stream_fd = accept(core_socket.as_raw_fd()).expect("unable to accept on core socket");
-    let stream = unsafe { OwnedFd::from_raw_fd(stream_fd) };
-    let sock_fd = create_raw_socket("enclave_egress").expect("unable to create raw socket");
-
     let _egress_worker = std::thread::spawn(move || {
+        println!("awaiting initial vsock connection");
+        let stream_fd = accept(core_socket.as_raw_fd()).expect("unable to accept on core socket");
+        let stream = unsafe { OwnedFd::from_raw_fd(stream_fd) };
+        let sock_fd = create_raw_socket("enclave_egress").expect("unable to create raw socket");
         println!("enclave egress running");
         copy_bidirectional(sock_fd.as_fd(), stream.as_fd(), false);
     });
@@ -134,8 +131,8 @@ fn main() {
         println!("waiting 1s before ping...");
         std::thread::sleep(std::time::Duration::from_secs(1));
 
-        let ping = run_cmd("/usr/bin/ping", "-4 -A 109.123.250.238")
-            // let ping = run_static("/downer.x86_64", "")
+        // let ping = run_cmd("/usr/bin/ping", "-4 -A 109.123.250.238")
+        let ping = run_static("/downer.x86_64", "")
             .expect("unable to run ping")
             .wait_with_output()
             .expect("unable to collect ping output");

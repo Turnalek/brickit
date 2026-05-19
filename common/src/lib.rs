@@ -6,6 +6,7 @@ use std::{
         OnceLock,
     },
     time::{Duration, SystemTime},
+    u16,
 };
 
 use libc::{ifreq, open, IFF_NO_PI, IFF_TUN, O_RDWR};
@@ -121,32 +122,32 @@ pub fn create_raw_socket(if_name: &str) -> Result<OwnedFd, nix::Error> {
 }
 
 // copies traffic in both directions between two sockets using threads
-pub fn copy_bidirectional<'fd>(fd1: BorrowedFd<'fd>, fd2: BorrowedFd<'fd>, debug: bool) {
+pub fn copy_bidirectional<'fd>(rsock: BorrowedFd<'fd>, vsock: BorrowedFd<'fd>, debug: bool) {
     std::thread::scope(|s| {
-        let sfd = fd1.clone();
-        let tfd = fd2.clone();
+        let sfd = rsock.clone();
+        let tfd = vsock.clone();
         s.spawn(move || {
             pipe_all(sfd, tfd, TrafficDirection::RawToVsock(debug))
                 .expect("error piping from raw to vsock");
         });
 
-        let sfd = fd1.clone();
-        let tfd = fd2.clone();
+        let sfd = rsock.clone();
+        let tfd = vsock.clone();
         s.spawn(move || {
-            pipe_all(tfd, sfd, TrafficDirection::VsockToRaw(debug))
-                .expect("error piping from vsock to raw");
+            // pipe_all(tfd, sfd, TrafficDirection::VsockToRaw(debug))
+            pipe_frames(tfd, sfd).expect("error piping from vsock to raw");
         });
     });
 }
 
-// sends all traffic from fd_from to fd_to
+// sends all traffic from fd_from to fd_to byte by byte
 fn pipe_all(
     fd_from: BorrowedFd,
     fd_to: BorrowedFd,
     direction: TrafficDirection,
 ) -> Result<(), nix::Error> {
     // NOTE: qemu has the same bug as aws nitro
-    let mut buf = [0u8; 1500];
+    let mut buf = [0u8; 32000];
     let debug = direction.debug();
 
     loop {
@@ -181,67 +182,65 @@ fn pipe_all(
     }
 }
 
-// copies traffic in both directions between two sockets using threads
-pub fn copy_bidirectional_raw(fd1: i32, fd2: i32, debug: bool) {
-    std::thread::scope(|s| {
-        s.spawn(move || {
-            pipe_all_raw(fd1, fd2, TrafficDirection::RawToVsock(debug))
-                .expect("error piping from raw to vsock");
-        });
+// returns Some(size) of the first ip frame present in `buf` or None if no complete frame is found
+// WARNING: assumes `buf` slice starts at frame boundary!
+fn next_frame(buf: &[u8]) -> Option<usize> {
+    let Ok((ip, _)) = etherparse::LaxIpSlice::from_slice(buf) else {
+        return None;
+    };
 
-        s.spawn(move || {
-            pipe_all_raw(fd2, fd1, TrafficDirection::VsockToRaw(debug))
-                .expect("error piping from vsock to raw");
-        });
-    });
+    let size: usize = if let Some(ip4) = ip.ipv4() {
+        ip4.header().total_len()
+    } else if let Some(ip6) = ip.ipv6() {
+        ip6.header().payload_length() + 40 // ip6 40 bytes header + payload_length
+    } else {
+        panic!("invalid ip version??");
+    }
+    .into();
+
+    if buf.len() < size {
+        None
+    } else {
+        Some(size)
+    }
 }
 
-// sends all traffic from fd_from to fd_to
-fn pipe_all_raw(fd_from: i32, fd_to: i32, direction: TrafficDirection) -> Result<(), nix::Error> {
+// sends all traffic from fd_from to fd_to byte by ip frames waiting for completion on reads
+fn pipe_frames(fd_from: BorrowedFd, fd_to: BorrowedFd) -> Result<(), nix::Error> {
     // NOTE: qemu has the same bug as aws nitro
     let mut buf = [0u8; 32000];
-    let debug = direction.debug();
+    let mut tmp = [0u8; 32000];
+    let mut frame_size;
+    let mut received = 0;
 
     loop {
-        let start = SystemTime::now();
-        let received = unsafe {
-            libc::read(
-                fd_from,
-                (&mut buf).as_mut_ptr().cast(),
-                buf.len() as libc::size_t,
-            ) as usize
-        };
+        loop {
+            received += read(fd_from, &mut buf[received..])?;
 
-        get_counters().read_add(
-            SystemTime::now()
-                .duration_since(start)
-                .map_err(|_| nix::Error::UnknownErrno)?,
-            &direction,
-        );
-
-        if debug {
-            eprintln!("received {received} @ {direction:?}");
+            if let Some(size) = next_frame(&buf[..received]) {
+                frame_size = size;
+                break;
+            }
         }
 
         let mut sent = 0;
-        while sent < received {
-            let start = SystemTime::now();
-            sent += unsafe {
-                libc::write(
-                    fd_to,
-                    (&buf[sent..received]).as_ptr().cast(),
-                    received - sent,
-                ) as usize
-            };
-            get_counters().write_add(
-                SystemTime::now()
-                    .duration_since(start)
-                    .map_err(|_| nix::Error::UnknownErrno)?,
-                &direction,
-            );
+        loop {
+            while sent < frame_size {
+                sent += write(fd_to, &buf[sent..frame_size])?;
+                // eprintln!("sent: {sent}");
+            }
 
-            if debug {
-                eprintln!("sent {sent} @ {direction:?}");
+            if let Some(size) = next_frame(&buf[sent..received]) {
+                frame_size = sent + size;
+            } else {
+                let tail_size = received - sent;
+                // copy tail to start so we can continue on reads
+                if sent < received {
+                    tmp[..tail_size].copy_from_slice(&buf[sent..received]);
+                    buf[..tail_size].copy_from_slice(&tmp[..tail_size]);
+                }
+                received = tail_size;
+                break;
             }
         }
     }
