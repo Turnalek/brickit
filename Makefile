@@ -16,11 +16,13 @@ out/nitro.eif: Dockerfile init/Cargo.toml init/src/*.rs common/Cargo.toml common
 	docker build -t brickit -f Dockerfile . --output type=tar,dest=out/nitro.tar
 	tar -xf out/nitro.tar -C out
 
-out/sender.tar: Dockerfile.sender sender/Cargo.toml sender/src/main.rs common/Cargo.toml common/src/*.rs
-	docker build -t sender -f Dockerfile.sender . --output type=tar,dest=out/sender.tar
+out/sender: sender/src/*.rs sender/Cargo.toml
+	cargo build --release --target x86_64-unknown-linux-musl -p downer
+	cp target/x86_64-unknown-linux-musl/release/sender out/sender
 
-out/sender: out/sender.tar
-	tar -xf out/sender.tar -C out
+out/downer: downer/src/*.rs downer/Cargo.toml
+	cargo build --release --target x86_64-unknown-linux-musl -p downer
+	cp target/x86_64-unknown-linux-musl/release/downer out/downer
 
 clean:
 	cargo clean
@@ -35,9 +37,6 @@ host:
 target/x86_64-unknown-linux-musl/release/sender: sender/src/main.rs sender/Cargo.toml
 	cargo build --release --target x86_64-unknown-linux-musl -p sender
 
-downer:
-	cargo build --release --target x86_64-unknown-linux-musl -p downer
-	cp target/x86_64-unknown-linux-musl/release/downer downer.x86_64
 
 upload: out/nitro.eif target/x86_64-unknown-linux-musl/release/sender
 	scp -i ~/.ssh/TURNKEY_TALOS_TEST.pem enclave_egress_interfaces.sh \

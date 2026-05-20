@@ -1,15 +1,11 @@
 mod nitro;
 mod system;
 
-use std::{
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
-    process::{Child, Command},
-};
+use std::process::{Child, Command};
 
-use common::{copy_bidirectional, create_core_socket, create_raw_socket, new_vsock_raw};
+use common::enclave_egress;
 
 use nitro::init_platform;
-use nix::sys::socket::{accept, bind, listen, Backlog};
 use system::{dmesg, freopen, get_local_cid, mount};
 
 // Mount common filesystems with conservative permissions
@@ -93,25 +89,8 @@ fn main() {
     let cid = get_local_cid().expect("unable to get local cid");
     dmesg(format!("CID is {cid:?}"));
 
-    let addr = new_vsock_raw(cid, PORT, VMADDR_NO_FLAGS);
-    let core_socket = create_core_socket().expect("unable to create core socket");
-
-    bind(core_socket.as_raw_fd(), &addr).expect("unable to bind core socket");
-
-    // rust stdlib uses a 128 connection backlog
-    listen(
-        &core_socket,
-        Backlog::new(1).expect("unable to set backlog"),
-    )
-    .expect("unable to listen on core socket");
-
     let _egress_worker = std::thread::spawn(move || {
-        println!("awaiting initial vsock connection");
-        let stream_fd = accept(core_socket.as_raw_fd()).expect("unable to accept on core socket");
-        let stream = unsafe { OwnedFd::from_raw_fd(stream_fd) };
-        let sock_fd = create_raw_socket("enclave_egress").expect("unable to create raw socket");
-        println!("enclave egress running");
-        copy_bidirectional(sock_fd, stream);
+        enclave_egress(cid, PORT);
     });
 
     println!("waiting 1s before info...");
@@ -132,7 +111,7 @@ fn main() {
         std::thread::sleep(std::time::Duration::from_secs(1));
 
         // let ping = run_cmd("/usr/bin/ping", "-4 -A 109.123.250.238")
-        let ping = run_static("/downer.x86_64", "")
+        let ping = run_static("/downer", "")
             .expect("unable to run ping")
             .wait_with_output()
             .expect("unable to collect ping output");

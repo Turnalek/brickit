@@ -32,8 +32,9 @@ COPY --from=iproute2 . /
 COPY --from=libcap . /
 COPY --from=iputils . /
 COPY --from=musl . /
-COPY hosts.file /hosts.file
-COPY downer.x86_64 /downer.x86_64
+COPY out/hosts.file /hosts.file
+COPY out/downer /downer
+COPY out/sender /sender
 COPY <<-EOF initramfs.list
 	file /init     init    0700 0 0
 	file /nsm.ko   nsm.ko  0600 0 0
@@ -59,7 +60,8 @@ COPY <<-EOF initramfs.list
 	file /usr/bin/ping     /usr/bin/ping    0700 0 0
 	file /lib/ld-musl-x86  /usr/lib/ld-musl-x86_64.so.1                   0700 0 0
 	file /usr/lib/libc.musl-x86_64.so.1 /usr/lib/libc.musl-x86_64.so.1    0644 0 0
-	file /downer.x86_64    /downer.x86_64   0700 0 0
+	file /downer    /downer   0700 0 0
+	file /sender    /sender   0700 0 0
 	file /hosts.file       /etc/hosts       0644 0 0
 	nod  /dev/console      0600 0 0 c 5 1
 EOF

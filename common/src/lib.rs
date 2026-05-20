@@ -1,11 +1,14 @@
 use std::{
     ffi::CString,
-    os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
 };
 
 use libc::{ifreq, open, IFF_NO_PI, IFF_TUN, O_RDWR};
 use nix::{
-    sys::socket::{socket, AddressFamily, SockFlag, SockType, SockaddrLike, VsockAddr},
+    sys::socket::{
+        accept, bind, connect, listen, socket, AddressFamily, Backlog, SockFlag, SockType,
+        SockaddrLike, VsockAddr,
+    },
     unistd::{read, write},
     NixPath,
 };
@@ -15,10 +18,39 @@ pub const VMADDR_FLAG_TO_HOST: u8 = 0x01;
 /// Don't specify any flags for a VSOCK.
 pub const VMADDR_NO_FLAGS: u8 = 0x00;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum TrafficDirection {
-    RawToVsock,
-    VsockToRaw,
+/// opens enclave side egress bridging using given cid and port
+pub fn enclave_egress(cid: u32, port: u32) {
+    let addr = new_vsock_raw(cid, port, VMADDR_NO_FLAGS);
+    let core_socket = create_core_socket().expect("unable to create core socket");
+
+    bind(core_socket.as_raw_fd(), &addr).expect("unable to bind core socket");
+
+    // rust stdlib uses a 128 connection backlog
+    listen(
+        &core_socket,
+        Backlog::new(1).expect("unable to set backlog"),
+    )
+    .expect("unable to listen on core socket");
+
+    println!("awaiting initial vsock connection");
+    let stream_fd = accept(core_socket.as_raw_fd()).expect("unable to accept on core socket");
+    let stream = unsafe { OwnedFd::from_raw_fd(stream_fd) };
+    let sock_fd = create_raw_socket("enclave_egress").expect("unable to create raw socket");
+    println!("enclave egress running");
+    copy_bidirectional(sock_fd, stream);
+}
+
+/// opens host side egress bridging at the specified address
+pub fn host_egress(cid: u32, port: u32) {
+    let addr = new_vsock_raw(cid, port, VMADDR_NO_FLAGS);
+    let proxy_fd = create_core_socket().expect("unable to create vsock");
+    connect(proxy_fd.as_raw_fd(), &addr).expect("unable to connect to vsock");
+
+    let sock_fd = create_raw_socket("host_egress").expect("unable to create raw socket");
+
+    let debug = false;
+    println!("host egress running: {debug}");
+    copy_bidirectional(sock_fd, proxy_fd);
 }
 
 #[repr(C)]
@@ -37,7 +69,7 @@ struct SockAddrVm {
 ///
 /// For flags see: [Add flags field in the vsock address](<https://lkml.org/lkml/2020/12/11/249>).
 #[allow(unsafe_code)]
-pub fn new_vsock_raw(cid: u32, port: u32, flags: u8) -> VsockAddr {
+fn new_vsock_raw(cid: u32, port: u32, flags: u8) -> VsockAddr {
     let vsock_addr = SockAddrVm {
         svm_family: AddressFamily::Vsock as libc::sa_family_t,
         svm_reserved1: 0,
@@ -106,8 +138,10 @@ pub fn create_raw_socket(if_name: &str) -> Result<OwnedFd, nix::Error> {
     }
 }
 
-// copies traffic in both directions between two sockets using threads
-pub fn copy_bidirectional(rsock: OwnedFd, vsock: OwnedFd) {
+/// Copies traffic in both directions between two sockets using threads, only returns on panics
+/// # Panics
+/// Panics if any read/write operation panics
+fn copy_bidirectional(rsock: OwnedFd, vsock: OwnedFd) {
     std::thread::scope(|s| {
         let sfd = rsock.as_fd();
         let tfd = vsock.as_fd();
