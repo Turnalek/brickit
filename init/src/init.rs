@@ -1,9 +1,10 @@
 mod nitro;
 mod system;
 
-use std::process::{Child, Command};
-
-use common::enclave_egress;
+use std::{
+    process::{Child, Command},
+    time::Duration,
+};
 
 use nitro::init_platform;
 use system::{dmesg, freopen, get_local_cid, mount};
@@ -106,8 +107,7 @@ fn main() {
     );
 
     println!("running enclave egress");
-    let _egress =
-        run_static("/sender", &format!("{cid} {PORT} true")).expect("unable to run egress");
+    run_forever("/sender", &format!("{cid} {PORT} true"));
 
     loop {
         println!("waiting 5s before download...");
@@ -139,6 +139,28 @@ fn run_static(cmd_path: &str, args: &str) -> std::io::Result<Child> {
         .env_clear()
         .args(args.split(" "))
         .spawn()
+}
+
+fn run_forever(cmd_path: &str, args: &str) {
+    let cmd_path = cmd_path.to_owned();
+    let args = args.to_owned();
+
+    std::thread::spawn(move || loop {
+        match Command::new(&cmd_path)
+            .env_clear()
+            .args(args.split(" "))
+            .spawn()
+        {
+            Ok(mut child) => {
+                let exit = child.wait(); // try to wait, restart  in any case
+                eprintln!("process {cmd_path} exit {exit:?}");
+            }
+            Err(err) => eprintln!("error spawning process {cmd_path}: {err}"),
+        }
+
+        eprintln!("process {cmd_path} exited, restarting in 200ms");
+        std::thread::sleep(Duration::from_millis(200));
+    });
 }
 
 fn run_cmd(cmd_path: &str, args: &str) -> std::io::Result<Child> {

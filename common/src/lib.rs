@@ -156,16 +156,22 @@ fn copy_bidirectional(rsock: OwnedFd, vsock: OwnedFd) {
     std::thread::scope(|s| {
         let sfd = rsock.as_fd();
         let tfd = vsock.as_fd();
-        s.spawn(move || {
-            pipe_all(sfd, tfd).expect("error piping from raw to vsock");
-        });
+        std::thread::Builder::new()
+            .name("raw_to_vsock".to_owned())
+            .spawn_scoped(s, move || {
+                pipe_all(sfd, tfd).expect("error piping from raw to vsock");
+            })
+            .expect("unable to run scoped thread");
 
         let sfd = rsock.as_fd();
         let tfd = vsock.as_fd();
-        s.spawn(move || {
-            // pipe_all(tfd, sfd, TrafficDirection::VsockToRaw(debug))
-            pipe_frames(tfd, sfd).expect("error piping from vsock to raw");
-        });
+        std::thread::Builder::new()
+            .name("vsock_to_raw".to_owned())
+            .spawn_scoped(s, move || {
+                // pipe_all(tfd, sfd, TrafficDirection::VsockToRaw(debug))
+                pipe_frames(tfd, sfd).expect("error piping from vsock to raw");
+            })
+            .expect("unable to run scoped thread");
     });
 }
 
