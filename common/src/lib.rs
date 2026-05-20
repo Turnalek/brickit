@@ -1,6 +1,7 @@
 use std::{
     ffi::CString,
     os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
+    time::Duration,
 };
 
 use libc::{ifreq, open, IFF_NO_PI, IFF_TUN, O_RDWR};
@@ -42,9 +43,19 @@ pub fn enclave_egress(cid: u32, port: u32) {
 
 /// opens host side egress bridging at the specified address
 pub fn host_egress(cid: u32, port: u32) {
-    let addr = new_vsock_raw(cid, port, VMADDR_NO_FLAGS);
-    let proxy_fd = create_core_socket().expect("unable to create vsock");
-    connect(proxy_fd.as_raw_fd(), &addr).expect("unable to connect to vsock");
+    // NOTE: it's important we don't loop just connect here as that seems to cause EPIPE errors after it does connect
+    let proxy_fd = loop {
+        let addr = new_vsock_raw(cid, port, VMADDR_NO_FLAGS);
+        let proxy_fd = create_core_socket().expect("unable to create vsock");
+
+        println!("connecting to egress server vsock");
+        if connect(proxy_fd.as_raw_fd(), &addr).is_ok() {
+            break proxy_fd;
+        }
+        println!("connect failed, retrying in 200ms");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    println!("connected to egress server vsock");
 
     let sock_fd = create_raw_socket("host_egress").expect("unable to create raw socket");
 

@@ -89,9 +89,9 @@ fn main() {
     let cid = get_local_cid().expect("unable to get local cid");
     dmesg(format!("CID is {cid:?}"));
 
-    let _egress_worker = std::thread::spawn(move || {
-        enclave_egress(cid, PORT);
-    });
+    // let _egress_worker = std::thread::spawn(move || {
+    //     enclave_egress(cid, PORT);
+    // });
 
     println!("waiting 1s before info...");
     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -105,11 +105,15 @@ fn main() {
         std::str::from_utf8(&ip_link.stdout).expect("invalid utf-8")
     );
 
-    // print_counters();
-    loop {
-        println!("waiting 1s before ping...");
-        std::thread::sleep(std::time::Duration::from_secs(1));
+    println!("running enclave egress");
+    let _egress =
+        run_static("/sender", &format!("{cid} {PORT} true")).expect("unable to run egress");
 
+    loop {
+        println!("waiting 5s before download...");
+        std::thread::sleep(std::time::Duration::from_secs(5));
+
+        println!("running download");
         // let ping = run_cmd("/usr/bin/ping", "-4 -A 109.123.250.238")
         let ping = run_static("/downer", "")
             .expect("unable to run ping")

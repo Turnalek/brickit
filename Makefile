@@ -12,15 +12,15 @@ stop:
 qemu: out/nitro.eif
 	qemu-system-x86_64 -M nitro-enclave,vsock=c,id=hello-world -kernel out/nitro.eif -nographic -m 4G --enable-kvm -cpu host -chardev socket,id=c,path=/tmp/vhost4.socket
 
-out/nitro.eif: Dockerfile init/Cargo.toml init/src/*.rs common/Cargo.toml common/src/*.rs downer/src/*.rs downer/Cargo.toml
+out/nitro.eif: Dockerfile init/Cargo.toml init/src/*.rs common/Cargo.toml common/src/*.rs downer/Cargo.toml out/downer out/sender
 	docker build -t brickit -f Dockerfile . --output type=tar,dest=out/nitro.tar
 	tar -xf out/nitro.tar -C out
 
-out/sender: sender/src/*.rs sender/Cargo.toml
-	cargo build --release --target x86_64-unknown-linux-musl -p downer
+out/sender: sender/src/*.rs sender/Cargo.toml common/src/*.rs common/Cargo.toml
+	cargo build --release --target x86_64-unknown-linux-musl -p sender
 	cp target/x86_64-unknown-linux-musl/release/sender out/sender
 
-out/downer: downer/src/*.rs downer/Cargo.toml
+out/downer: downer/src/*.rs downer/Cargo.toml common/src/*.rs common/Cargo.toml
 	cargo build --release --target x86_64-unknown-linux-musl -p downer
 	cp target/x86_64-unknown-linux-musl/release/downer out/downer
 
@@ -38,10 +38,10 @@ target/x86_64-unknown-linux-musl/release/sender: sender/src/main.rs sender/Cargo
 	cargo build --release --target x86_64-unknown-linux-musl -p sender
 
 
-upload: out/nitro.eif target/x86_64-unknown-linux-musl/release/sender
+upload: out/nitro.eif out/sender
 	scp -i ~/.ssh/TURNKEY_TALOS_TEST.pem enclave_egress_interfaces.sh \
 	out/nitro.eif \
-	target/x86_64-unknown-linux-musl/release/sender \
+	out/sender \
 	ec2-user@$(EC2):~
 
 ssh:

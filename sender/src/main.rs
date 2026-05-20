@@ -1,7 +1,9 @@
 use common::{enclave_egress, host_egress};
 
 fn main() {
-    let mut args = std::env::args();
+    let args: Vec<String> = std::env::args().collect();
+    println!("ARGS: {args:?}");
+    let mut args = args.into_iter();
     args.next();
 
     let cid: u32 = args
@@ -21,6 +23,8 @@ fn main() {
         .unwrap_or("false".to_owned())
         .parse()
         .expect("unable to parse enclave arg");
+
+    println!("cid: {cid} port: {port} enclave: {enclave}");
 
     if enclave {
         enclave_egress(cid, port);
