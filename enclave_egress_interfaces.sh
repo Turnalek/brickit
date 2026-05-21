@@ -3,8 +3,7 @@
 
 set -e
 
-# AMAZON BITS
-sudo modprobe br_netfilter
+DEFINT="${1:-eth0}"
 
 # create egress from host tun interface
 sudo ip tuntap add host_egress mode tun
@@ -20,14 +19,7 @@ echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward > /dev/null
 sudo iptables -P FORWARD ACCEPT
 
 # masquerade nat for egress
-sudo iptables -t nat -I POSTROUTING -s 10.0.0.1 -j MASQUERADE -o "wlan0"
+sudo iptables -t nat -I POSTROUTING -s 10.0.0.1 -j MASQUERADE -o "$DEFINT"
 
 # check it
 ip a show dev host_egress
-
-# DEBUG STUFF
-#
-# sudo tcpdump -i host_egress -vv -n host 109.123.250.238
-# 
-
-# possibly disable STP on the host

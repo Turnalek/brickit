@@ -1,6 +1,7 @@
 use std::{
     ffi::CString,
     os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
+    process::{Child, Command},
     time::Duration,
 };
 
@@ -21,6 +22,8 @@ pub const VMADDR_NO_FLAGS: u8 = 0x00;
 
 /// opens enclave side egress bridging using given cid and port
 pub fn enclave_egress(cid: u32, port: u32) {
+    setup_enclave_tunnel();
+
     let addr = new_vsock_raw(cid, port, VMADDR_NO_FLAGS);
     let core_socket = create_core_socket().expect("unable to create core socket");
 
@@ -62,6 +65,25 @@ pub fn host_egress(cid: u32, port: u32) {
     let debug = false;
     println!("host egress running: {debug}");
     copy_bidirectional(sock_fd, proxy_fd);
+}
+
+// sets up new tuntap tun interface `enclave_egress` with localhost routing using `10.0.0.1/32` mask
+// and default gw
+fn setup_enclave_tunnel() {
+    run_ip("tuntap add enclave_egress mode tun", "tuntap add failed");
+    run_ip("link set lo up", "unable to bring up lo");
+    run_ip("address add 10.0.0.1/32 dev lo", "ip assign to lo failed");
+    run_ip("link set enclave_egress up", "unable to bring up egress");
+    run_ip("route add default dev enclave_egress", "unable to route");
+
+    // let ip_link = run_with_ld(IP_PATH, "a show dev lo")
+    //     .expect("unable to run ip command")
+    //     .wait_with_output()
+    //     .expect("ip program failed to finish");
+    // eprintln!(
+    //     "{}",
+    //     std::str::from_utf8(&ip_link.stdout).expect("invalid utf-8")
+    // );
 }
 
 #[repr(C)]
@@ -250,4 +272,51 @@ fn pipe_frames(fd_from: BorrowedFd, fd_to: BorrowedFd) -> Result<(), nix::Error>
             }
         }
     }
+}
+
+pub const IP_PATH: &str = "/usr/sbin/ip";
+
+/// run the `ip` utility via the `run_with_ld`
+pub fn run_ip(args: &str, fail_str: &str) {
+    let ip_exit = run_with_ld(IP_PATH, args)
+        .expect("unable to run ip command")
+        .wait()
+        .expect("ip program failed to finish");
+    assert!(ip_exit.success(), "{}", fail_str);
+}
+
+/// run a statically linked program and return the `Child` handle
+pub fn run_static(cmd_path: &str, args: &str) -> std::io::Result<Child> {
+    Command::new(cmd_path)
+        .env_clear()
+        .args(args.split(" "))
+        .spawn()
+}
+
+/// run a statically linked program in a loop
+pub fn run_looping(cmd_path: &str, args: &str) {
+    let cmd_path = cmd_path.to_owned();
+    let args = args.to_owned();
+
+    std::thread::spawn(move || loop {
+        match run_static(&cmd_path, &args) {
+            Ok(mut child) => {
+                let exit = child.wait(); // try to wait, restart  in any case
+                eprintln!("process {cmd_path} exit {exit:?}");
+            }
+            Err(err) => eprintln!("error spawning process {cmd_path}: {err}"),
+        }
+
+        eprintln!("process {cmd_path} exited, restarting in 200ms");
+        std::thread::sleep(Duration::from_millis(200));
+    });
+}
+
+/// run a program with `/lib/ld-musl-x86` loader and return the `Child` handle
+pub fn run_with_ld(cmd_path: &str, args: &str) -> std::io::Result<Child> {
+    Command::new("/lib/ld-musl-x86")
+        .env_clear()
+        .arg(cmd_path)
+        .args(args.split(" "))
+        .spawn()
 }
