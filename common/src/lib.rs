@@ -67,12 +67,15 @@ pub fn host_egress(cid: u32, port: u32) {
     copy_bidirectional(sock_fd, proxy_fd);
 }
 
-// sets up new tuntap tun interface `enclave_egress` with localhost routing using `10.0.0.1/32` mask
+// sets up new tuntap tun interface `enclave_egress` with localhost routing using `172.29.107.65` mask
 // and default gw
 fn setup_enclave_tunnel() {
     run_ip("tuntap add enclave_egress mode tun", "tuntap add failed");
     run_ip("link set lo up", "unable to bring up lo");
-    run_ip("address add 10.0.0.1/32 dev lo", "ip assign to lo failed");
+    run_ip(
+        "address add 172.29.107.65/32 dev lo",
+        "ip assign to lo failed",
+    );
     run_ip("link set enclave_egress up", "unable to bring up egress");
     run_ip("route add default dev enclave_egress", "unable to route");
 
